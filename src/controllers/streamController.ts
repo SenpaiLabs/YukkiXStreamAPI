@@ -42,6 +42,27 @@ export class StreamController {
       return;
     }
 
+    // Direct SoundCloud URL handling
+    if (trimmed.includes('soundcloud.com')) {
+      const scInfo = await fallbackService.getDirectUrlFromLink(trimmed);
+      if (scInfo && scInfo.url) {
+        const responseData = {
+          streamUrl: scInfo.url,
+          title: scInfo.title,
+          quality: '128kbps',
+          duration: scInfo.duration,
+          thumbnail: scInfo.thumbnail,
+          artist: scInfo.artist,
+        };
+        cacheService.set(cacheKey, responseData, 14400);
+        res.json({
+          success: true,
+          data: responseData,
+        });
+        return;
+      }
+    }
+
     try {
       const videoInfo = await youtubeService.resolveTrack(trimmed);
       const videoTitle = videoInfo.title || '';
@@ -59,8 +80,8 @@ export class StreamController {
 
         if (saavnTrack && saavnTrack.streamUrl) {
           const saavnTitleLower = saavnTrack.title.toLowerCase();
-          const cleanWords = cleanTitle.toLowerCase().split(' ').filter(w => w.length > 2);
-          const hasMatch = cleanWords.some(w => saavnTitleLower.includes(w));
+          const cleanWords = cleanTitle.toLowerCase().split(' ').filter((w) => w.length > 2);
+          const hasMatch = cleanWords.some((w) => saavnTitleLower.includes(w));
           const durationMatch =
             !videoInfo.duration ||
             !saavnTrack.duration ||
@@ -88,12 +109,12 @@ export class StreamController {
       const baseUrl = `${protocol}://${host}`;
 
       const pipeUrl = `${baseUrl}/pipe/${videoInfo.id}?title=${encodeURIComponent(videoTitle)}`;
-      const finalStreamUrl = (directUrl && !directUrl.includes('.m3u8')) ? directUrl : pipeUrl;
+      const finalStreamUrl = directUrl && !directUrl.includes('.m3u8') ? directUrl : pipeUrl;
 
       const responseData = {
         streamUrl: finalStreamUrl,
         title: videoInfo.title,
-        quality: '320kbps',
+        quality: directUrl ? '320kbps' : '192kbps',
         duration: videoInfo.duration || 0,
         thumbnail: videoInfo.thumbnail || '',
         artist: videoInfo.author || 'Unknown Artist',
@@ -174,6 +195,14 @@ export class StreamController {
       return;
     }
 
+    // Fast HEAD response for PyTgCalls / curl probes
+    if (req.method === 'HEAD') {
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Accept-Ranges', 'none');
+      res.status(200).end();
+      return;
+    }
+
     let title = titleHint;
     if (!title) {
       try {
@@ -189,14 +218,6 @@ export class StreamController {
 
     if (!streamUrl) {
       res.status(500).json({ success: false, error: `Could not extract stream for ${id}` });
-      return;
-    }
-
-    // Fast HEAD response for PyTgCalls / curl probes
-    if (req.method === 'HEAD') {
-      res.setHeader('Content-Type', 'audio/mpeg');
-      res.setHeader('Accept-Ranges', 'none');
-      res.status(200).end();
       return;
     }
 

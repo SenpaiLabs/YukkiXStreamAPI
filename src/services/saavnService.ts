@@ -31,15 +31,18 @@ export class SaavnService {
   }
 
   public async getOfficialStream(query: string): Promise<SaavnSong | null> {
+    if (!query || query.trim().length === 0) return null;
+
     const cleanQuery = query.toLowerCase().trim();
     const cacheKey = `saavn:track:${cleanQuery}`;
     const cached = cacheService.get<SaavnSong>(cacheKey);
     if (cached) return cached;
 
     try {
+      // Use autocomplete to ensure exact official tracks and avoid false matches
       const searchUrl = `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query=${encodeURIComponent(query)}`;
       const searchRes = await fetch(searchUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
       });
 
       if (!searchRes.ok) return null;
@@ -49,18 +52,15 @@ export class SaavnService {
 
       const detailUrl = `https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0&_format=json&pids=${song.id}`;
       const detailRes = await fetch(detailUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
       });
 
       if (!detailRes.ok) return null;
       const detailData = (await detailRes.json()) as any;
       const trackObj = detailData?.[song.id];
-      if (!trackObj) return null;
+      if (!trackObj || !trackObj.encrypted_media_url) return null;
 
-      const encryptedMediaUrl = trackObj.encrypted_media_url;
-      if (!encryptedMediaUrl) return null;
-
-      const streamUrl = this.decryptMediaUrl(encryptedMediaUrl);
+      const streamUrl = this.decryptMediaUrl(trackObj.encrypted_media_url);
       if (!streamUrl || !streamUrl.startsWith('http')) return null;
 
       const result: SaavnSong = {

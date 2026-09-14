@@ -67,13 +67,47 @@ export class YouTubeService {
 
   public cleanTitle(rawTitle: string): string {
     return rawTitle
-      .replace(/\[.*?\]|\(.*?\)/g, '')
-      .replace(/ft\..*|feat\..*/i, '')
-      .replace(/official\s*(music)?\s*(video|audio)?/gi, '')
-      .replace(/lyrics?/gi, '')
-      .replace(/\|\s*.*$/g, '')
+      .replace(/\[(?:[^\]]*(?:official|video|audio|lyrics?|lyrical|4k|hd|remastered)[^\]]*)\]/gi, '')
+      .replace(/\((?:[^\)]*(?:official|video|audio|lyrics?|lyrical|4k|hd|remastered|feat\.|ft\.)[^\)]*)\)/gi, '')
+      .replace(/\[(?:feat\.|ft\.).*?\]/gi, '')
+      .replace(/\b(official\s*(music)?\s*(video|audio)?|lyrical(\s*video)?|lyrics?|full\s*(video|audio|song))\b/gi, '')
+      .replace(/\b(ft\.|feat\.)\s+[^()\[\]|]+/gi, '')
+      .replace(/[()[\]{}]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  public extractTitleCandidates(rawTitle: string, author?: string): string[] {
+    const candidates: string[] = [];
+    const cleaned = this.cleanTitle(rawTitle);
+
+    // 1. Full cleaned title without pipe clutter
+    const noPipe = cleaned.split('|')[0].trim();
+    if (noPipe) candidates.push(noPipe);
+    if (cleaned && cleaned !== noPipe) candidates.push(cleaned);
+
+    // 2. Segments split by '|' or '/'
+    const segments = rawTitle
+      .split(/[|/]/)
+      .map((s) => this.cleanTitle(s))
+      .filter((s) => s.length > 2);
+
+    for (const seg of segments) {
+      if (!candidates.includes(seg)) {
+        candidates.push(seg);
+      }
+    }
+
+    // 3. Main segment with author
+    if (segments.length > 0 && author && author !== 'YouTube' && author !== 'Unknown Artist') {
+      const cleanAuthor = author.replace(/-\s*Topic|VEVO/gi, '').trim();
+      const withAuthor = `${segments[0]} ${cleanAuthor}`.trim();
+      if (!candidates.includes(withAuthor)) {
+        candidates.push(withAuthor);
+      }
+    }
+
+    return candidates;
   }
 
   public async normalizeQuery(queryOrUrl: string): Promise<string> {
@@ -105,6 +139,14 @@ export class YouTubeService {
           const match = cleanUrl.match(/\/(?:song|album)\/([^/?#]+)/);
           if (match && match[1]) {
             return match[1].replace(/-/g, ' ');
+          }
+        } catch {}
+      } else if (cleanUrl.includes('soundcloud.com')) {
+        try {
+          const sc = await fallbackService.getDirectUrlFromLink(cleanUrl);
+          if (sc && sc.title) {
+            const author = sc.artist ? ` ${sc.artist}` : '';
+            return `${sc.title}${author}`.trim();
           }
         } catch {}
       }

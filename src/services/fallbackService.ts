@@ -15,7 +15,7 @@ export class FallbackService {
           '--no-warnings',
           '--no-playlist',
           '-f',
-          'http_mp3/bestaudio[protocol^=http]/bestaudio',
+          'http_mp3/bestaudio[protocol^=http]/bestaudio/best',
           `scsearch3:${query}`,
         ],
         { timeout: 8000 },
@@ -30,14 +30,59 @@ export class FallbackService {
             .map((l) => l.trim())
             .filter((l) => l.startsWith('http'));
 
-          // Filter out 30-second SoundCloud preview clips so full song plays
-          const url = urls.find((u) => !u.includes('preview')) || null;
+          // Prefer full audio track, fallback to first available stream
+          const url = urls.find((u) => !u.includes('preview')) || urls[0] || null;
 
           if (url && url.startsWith('http')) {
             cacheService.set(cacheKey, url, 7200);
             return resolve(url);
           }
           resolve(null);
+        }
+      );
+    });
+  }
+
+  public async getDirectUrlFromLink(
+    url: string
+  ): Promise<{ url: string; title: string; duration: number; artist: string; thumbnail: string } | null> {
+    const cacheKey = `sc:link:${url.trim()}`;
+    const cached = cacheService.get<any>(cacheKey);
+    if (cached) return cached;
+
+    return new Promise((resolve) => {
+      execFile(
+        'yt-dlp',
+        ['--dump-json', '--no-warnings', url.trim()],
+        { timeout: 12000 },
+        (error, stdout) => {
+          if (error || !stdout) {
+            console.warn(`[FallbackService] Direct link extraction failed for "${url}":`, error?.message);
+            return resolve(null);
+          }
+          try {
+            const data = JSON.parse(stdout);
+            let streamUrl = data.url;
+            if (!streamUrl && data.formats && data.formats.length > 0) {
+              const mp3Format = data.formats.find((f: any) => f.ext === 'mp3' || f.protocol === 'http');
+              streamUrl = mp3Format?.url || data.formats[0].url;
+            }
+
+            if (!streamUrl) return resolve(null);
+
+            const result = {
+              url: streamUrl,
+              title: data.title || 'SoundCloud Track',
+              duration: Math.round(data.duration || 0),
+              artist: data.uploader || data.artist || 'SoundCloud Artist',
+              thumbnail: data.thumbnail || '',
+            };
+
+            cacheService.set(cacheKey, result, 7200);
+            return resolve(result);
+          } catch {
+            return resolve(null);
+          }
         }
       );
     });
