@@ -18,7 +18,6 @@ export class StreamController {
       version: '1.0.0',
       uptime: process.uptime(),
       clientType: config.ytClientType,
-      fallbackEnabled: config.enableFallback,
       proxies: proxyStatus,
       cache: cacheStats,
       timestamp: new Date().toISOString(),
@@ -44,7 +43,6 @@ export class StreamController {
    */
   public async resolveStream(req: Request, res: Response): Promise<void> {
     const queryOrUrl = (req.query.url as string) || (req.query.q as string);
-    const format = (req.query.format as string) || 'audio';
 
     if (!queryOrUrl || queryOrUrl.trim().length === 0) {
       res.status(400).json({
@@ -91,7 +89,6 @@ export class StreamController {
   public async search(req: Request, res: Response): Promise<void> {
     const query = (req.query.query as string) || (req.query.q as string);
     const limit = parseInt((req.query.limit as string) || '5', 10);
-    const platform = (req.query.platform as string) || 'youtube';
 
     if (!query || query.trim().length === 0) {
       res.status(400).json({ success: false, error: 'Query parameter "query" or "q" is required.' });
@@ -146,7 +143,7 @@ export class StreamController {
 
   /**
    * Direct Audio Pipe (Handles PyTgCalls, ffmpeg, and curl -I HEAD requests)
-   * GET /pipe/:id OR GET /api/stream/:id
+   * GET /pipe/:id OR GET /stream/:id
    */
   public async pipeAudio(req: Request, res: Response): Promise<void> {
     const id = req.params.id;
@@ -157,52 +154,37 @@ export class StreamController {
       return;
     }
 
+    // 1. Resolve title
+    let title = titleHint;
+    if (!title) {
+      try {
+        const info = await youtubeService.resolveTrack(id);
+        title = info.title;
+      } catch {
+        title = id;
+      }
+    }
+
+    // 2. Fetch direct playable stream URL
+    const cleanSearchQuery = youtubeService.cleanTitle(title || id);
+    const streamUrl = await fallbackService.getDirectStream(cleanSearchQuery);
+
+    if (!streamUrl) {
+      res.status(500).json({ success: false, error: `Could not extract stream for ${id}` });
+      return;
+    }
+
     // CRITICAL: Handle HTTP HEAD requests (e.g. curl -I or PyTgCalls probe)
     if (req.method === 'HEAD') {
       res.setHeader('Content-Type', 'audio/webm');
-      res.setHeader('Transfer-Encoding', 'chunked');
       res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Location', streamUrl);
       res.status(200).end();
       return;
     }
 
-    try {
-      const streamResult = await youtubeService.getAudioStream(id, titleHint);
-
-      if (!streamResult.stream) {
-        res.status(404).json({ error: 'Stream could not be extracted.' });
-        return;
-      }
-
-      res.setHeader('Content-Type', 'audio/webm');
-      res.setHeader('Transfer-Encoding', 'chunked');
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('X-Stream-Source', streamResult.source);
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-
-      if (streamResult.title) {
-        res.setHeader('X-Track-Title', encodeURIComponent(streamResult.title));
-      }
-
-      // Handle client disconnect gracefully
-      req.on('close', () => {
-        if (streamResult.stream && !streamResult.stream.destroyed) {
-          streamResult.stream.destroy();
-        }
-      });
-
-      // Stream chunks directly
-      streamResult.stream.pipe(res);
-    } catch (err: any) {
-      console.error(`[StreamController] Pipe error for ${id}:`, err?.message || err);
-      if (!res.headersSent) {
-        res.status(500).json({
-          success: false,
-          error: err.message || 'Failed to stream audio.',
-        });
-      }
-    }
+    // 3. Redirect PyTgCalls/ffmpeg directly to CDN stream (0 VPS load, max speed, 302 Found)
+    res.redirect(302, streamUrl);
   }
 
   /**

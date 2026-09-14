@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import { config } from '../config.js';
 import { proxyManager } from './proxyManager.js';
 import { cacheService } from './cacheService.js';
-import { fallbackService, FallbackTrack } from './fallbackService.js';
+import { fallbackService } from './fallbackService.js';
 
 export interface SearchResultItem {
   id: string;
@@ -384,18 +384,16 @@ export class YouTubeService {
 
       if (searchQuery) {
         console.log(`[YouTubeService] Using Fallback stream for: "${searchQuery}"`);
-        const fallback = await fallbackService.getFallbackTrack(searchQuery);
+        const streamUrl = await fallbackService.getDirectStream(searchQuery);
 
-        if (fallback && fallback.streamUrl) {
-          const fbRes = await fetch(fallback.streamUrl);
+        if (streamUrl) {
+          const fbRes = await fetch(streamUrl);
 
           if (fbRes.ok && fbRes.body) {
             return {
               stream: Readable.fromWeb(fbRes.body as any),
-              source: fallback.source,
-              title: fallback.title,
-              artist: fallback.artist,
-              thumbnail: fallback.thumbnail,
+              source: 'soundcloud',
+              title: rawTitle || videoId,
             };
           }
         }
