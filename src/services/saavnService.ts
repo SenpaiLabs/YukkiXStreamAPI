@@ -15,9 +15,6 @@ export interface SaavnSong {
 export class SaavnService {
   private readonly desKey = CryptoJS.enc.Utf8.parse('38346591');
 
-  /**
-   * Decrypts JioSaavn encrypted_media_url to direct CDN audio stream
-   */
   public decryptMediaUrl(encryptedUrl: string): string {
     try {
       const decrypted = CryptoJS.DES.decrypt(
@@ -27,16 +24,12 @@ export class SaavnService {
       );
       const rawUrl = decrypted.toString(CryptoJS.enc.Utf8).trim();
       if (!rawUrl) return '';
-      // Upgrade to studio master 320kbps
       return rawUrl.replace(/_96\.mp4|_160\.mp4/, '_320.mp4');
     } catch {
       return '';
     }
   }
 
-  /**
-   * Searches JioSaavn for official studio release and returns direct 320kbps stream
-   */
   public async getOfficialStream(query: string): Promise<SaavnSong | null> {
     const cleanQuery = query.toLowerCase().trim();
     const cacheKey = `saavn:track:${cleanQuery}`;
@@ -44,7 +37,6 @@ export class SaavnService {
     if (cached) return cached;
 
     try {
-      // 1. Search song
       const searchUrl = `https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query=${encodeURIComponent(query)}`;
       const searchRes = await fetch(searchUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
@@ -55,7 +47,6 @@ export class SaavnService {
       const song = searchData?.songs?.data?.[0];
       if (!song || !song.id) return null;
 
-      // 2. Fetch song details
       const detailUrl = `https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0&_format=json&pids=${song.id}`;
       const detailRes = await fetch(detailUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
@@ -83,7 +74,6 @@ export class SaavnService {
         quality: '320kbps',
       };
 
-      // Cache for 6 hours
       cacheService.set(cacheKey, result, 21600);
       return result;
     } catch (err: any) {

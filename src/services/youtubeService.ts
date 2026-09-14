@@ -20,9 +20,6 @@ export class YouTubeService {
   private isInitializing: boolean = false;
   private initPromise: Promise<Innertube> | null = null;
 
-  /**
-   * Initializes or gets the active InnerTube instance
-   */
   public async getInstance(): Promise<Innertube> {
     if (this.innertube) {
       return this.innertube;
@@ -60,9 +57,6 @@ export class YouTubeService {
     return this.initPromise;
   }
 
-  /**
-   * Extracts YouTube Video ID from standard formats or returns as-is
-   */
   public extractVideoId(queryOrUrl: string): string | null {
     if (/^[a-zA-Z0-9_-]{11}$/.test(queryOrUrl)) {
       return queryOrUrl;
@@ -71,9 +65,6 @@ export class YouTubeService {
     return match ? match[1] : null;
   }
 
-  /**
-   * Cleans title string for search fallbacks (removes [Official Video], feat, etc.)
-   */
   public cleanTitle(rawTitle: string): string {
     return rawTitle
       .replace(/\[.*?\]|\(.*?\)/g, '')
@@ -85,9 +76,6 @@ export class YouTubeService {
       .trim();
   }
 
-  /**
-   * Resolves a video ID or search query to track metadata
-   */
   public async resolveTrack(queryOrUrl: string): Promise<{ id: string; title: string; duration: number; author: string; thumbnail?: string }> {
     const videoId = this.extractVideoId(queryOrUrl);
 
@@ -102,7 +90,6 @@ export class YouTubeService {
           thumbnail: info.thumbnails?.[0]?.url,
         };
       } catch {
-        // Fallback to oEmbed if getInfo fails
         const title = await this.resolveVideoTitle(videoId);
         return {
           id: videoId,
@@ -114,7 +101,6 @@ export class YouTubeService {
       }
     }
 
-    // If it's a search term, search and get the first result
     const searchResults = await this.search(queryOrUrl, 1);
     if (searchResults.length > 0) {
       const top = searchResults[0];
@@ -130,9 +116,6 @@ export class YouTubeService {
     throw new Error(`Could not resolve track for: "${queryOrUrl}"`);
   }
 
-  /**
-   * Resolves a video ID to song title via public oEmbed
-   */
   public async resolveVideoTitle(videoId: string): Promise<string | null> {
     try {
       const controller = new AbortController();
@@ -153,9 +136,6 @@ export class YouTubeService {
     return null;
   }
 
-  /**
-   * Search songs with YouTube + Fallback support
-   */
   public async search(query: string, limit: number = 10): Promise<SearchResultItem[]> {
     const cacheKey = `yt:search:${query.toLowerCase().trim()}`;
     const cached = cacheService.get<SearchResultItem[]>(cacheKey);
@@ -197,9 +177,7 @@ export class YouTubeService {
       console.warn(`[YouTubeService] YouTube search error:`, err?.message || err);
     }
 
-    // Fallback search if YouTube returns 0 results
     if (results.length === 0 && config.enableFallback) {
-      console.log(`[YouTubeService] YouTube returned 0 results, attempting fallback search...`);
       const fallbackTracks = await fallbackService.searchAll(query, limit);
 
       for (const fb of fallbackTracks) {
@@ -223,9 +201,6 @@ export class YouTubeService {
     return results;
   }
 
-  /**
-   * Get autoplay recommendations
-   */
   public async getAutoplayList(queryOrUrl: string, limit: number = 5): Promise<any[]> {
     const videoId = this.extractVideoId(queryOrUrl) || queryOrUrl;
 
@@ -252,7 +227,6 @@ export class YouTubeService {
       if (related.length > 0) return related;
     } catch {}
 
-    // Fallback: search similar songs
     return (await this.search(queryOrUrl, limit)).map((item) => ({
       id: item.id,
       title: item.title,
@@ -262,9 +236,6 @@ export class YouTubeService {
     }));
   }
 
-  /**
-   * Get Video Metadata
-   */
   public async getInfo(videoId: string) {
     const cacheKey = `yt:info:${videoId}`;
     const cached = cacheService.get<any>(cacheKey);
@@ -296,7 +267,6 @@ export class YouTubeService {
       throw err;
     }
   }
-
 }
 
 export const youtubeService = new YouTubeService();
