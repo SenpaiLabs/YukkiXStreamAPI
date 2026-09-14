@@ -1,42 +1,45 @@
-import NodeCache from 'node-cache';
 import { config } from '../config.js';
 
-class CacheService {
-  private cache: NodeCache;
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
 
-  constructor() {
-    this.cache = new NodeCache({
-      stdTTL: config.cacheTtlSeconds,
-      checkperiod: 600,
-      useClones: false,
-    });
-  }
+class CacheService {
+  private store = new Map<string, CacheEntry<any>>();
 
   public get<T>(key: string): T | undefined {
-    return this.cache.get<T>(key);
+    const entry = this.store.get(key);
+    if (!entry) return undefined;
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return entry.value as T;
   }
 
-  public set<T>(key: string, value: T, ttlSeconds?: number): boolean {
-    if (ttlSeconds !== undefined) {
-      return this.cache.set(key, value, ttlSeconds);
-    }
-    return this.cache.set(key, value);
+  public set<T>(key: string, value: T, ttlSeconds: number = config.cacheTtlSeconds): boolean {
+    this.store.set(key, {
+      value,
+      expiresAt: Date.now() + ttlSeconds * 1000,
+    });
+    return true;
   }
 
   public has(key: string): boolean {
-    return this.cache.has(key);
+    return this.get(key) !== undefined;
   }
 
   public del(key: string): number {
-    return this.cache.del(key);
+    return this.store.delete(key) ? 1 : 0;
   }
 
   public getStats() {
-    return this.cache.getStats();
+    return { keys: this.store.size };
   }
 
   public flush(): void {
-    this.cache.flushAll();
+    this.store.clear();
   }
 }
 

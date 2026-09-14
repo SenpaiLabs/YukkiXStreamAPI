@@ -1,7 +1,5 @@
-import { Innertube, ClientType, UniversalCache } from 'youtubei.js';
-import { Readable } from 'node:stream';
+import { Innertube, UniversalCache } from 'youtubei.js';
 import { config } from '../config.js';
-import { proxyManager } from './proxyManager.js';
 import { cacheService } from './cacheService.js';
 import { fallbackService } from './fallbackService.js';
 
@@ -15,18 +13,6 @@ export interface SearchResultItem {
   thumbnail?: string;
   views?: string;
   url: string;
-}
-
-export interface StreamDataResult {
-  stream?: Readable;
-  directUrl?: string;
-  mimeType?: string;
-  bitrate?: number;
-  contentLength?: number;
-  source: 'youtube' | 'jiosaavn' | 'soundcloud';
-  title?: string;
-  artist?: string;
-  thumbnail?: string;
 }
 
 export class YouTubeService {
@@ -51,38 +37,6 @@ export class YouTubeService {
       try {
         console.log('[YouTubeService] Initializing InnerTube session...');
 
-        const customFetch = async (input: any, init?: RequestInit): Promise<Response> => {
-          const proxy = proxyManager.getNextProxy();
-          const modifiedInit: RequestInit = { ...init };
-
-          if (proxy) {
-            const agent = proxyManager.createNodeAgent(proxy.url);
-            if (agent) {
-              (modifiedInit as any).agent = agent;
-            }
-          }
-
-          try {
-            const res = await fetch(input as any, modifiedInit);
-
-            if (res.status === 429) {
-              console.warn(`[YouTubeService] Received HTTP 429 from YouTube.`);
-              if (proxy) {
-                proxyManager.reportFailure(proxy.url, true);
-              }
-            } else if (res.ok && proxy) {
-              proxyManager.reportSuccess(proxy.url);
-            }
-
-            return res;
-          } catch (err) {
-            if (proxy) {
-              proxyManager.reportFailure(proxy.url, false);
-            }
-            throw err;
-          }
-        };
-
         const yt = await Innertube.create({
           retrieve_player: true,
           generate_session_locally: true,
@@ -90,7 +44,6 @@ export class YouTubeService {
           cookie: config.ytCookies,
           po_token: config.ytPoToken,
           visitor_data: config.ytVisitorData,
-          fetch: config.proxies.length > 0 ? (customFetch as any) : undefined,
         });
 
         console.log('[YouTubeService] InnerTube successfully initialized and ready!');
@@ -344,64 +297,6 @@ export class YouTubeService {
     }
   }
 
-  /**
-   * Audio Stream Pipe (Bulletproof: YouTube Direct -> YouTube Clients -> JioSaavn 320kbps Fallback)
-   */
-  public async getAudioStream(videoId: string, songTitleHint?: string): Promise<StreamDataResult> {
-    const clients: ('TV_EMBEDDED' | 'ANDROID' | 'IOS' | 'WEB')[] = ['TV_EMBEDDED', 'ANDROID', 'IOS', 'WEB'];
-
-    // 1. Try YouTube stream decipher
-    for (const client of clients) {
-      try {
-        const yt = await this.getInstance();
-        const webStream = await yt.download(videoId, {
-          type: 'audio',
-          quality: 'best',
-          client,
-        });
-
-        if (webStream) {
-          const nodeStream = Readable.fromWeb(webStream as any);
-          return {
-            stream: nodeStream,
-            source: 'youtube',
-          };
-        }
-      } catch (err: any) {
-        // Continue to next client or fallback
-      }
-    }
-
-    // 2. Automatic Fallback to high quality direct audio stream
-    if (config.enableFallback) {
-      let rawTitle = songTitleHint;
-
-      if (!rawTitle) {
-        rawTitle = (await this.resolveVideoTitle(videoId)) || undefined;
-      }
-
-      const searchQuery = this.cleanTitle(rawTitle || videoId);
-
-      if (searchQuery) {
-        console.log(`[YouTubeService] Using Fallback stream for: "${searchQuery}"`);
-        const streamUrl = await fallbackService.getDirectStream(searchQuery);
-
-        if (streamUrl) {
-          const fbRes = await fetch(streamUrl);
-
-          if (fbRes.ok && fbRes.body) {
-            return {
-              stream: Readable.fromWeb(fbRes.body as any),
-              source: 'soundcloud',
-              title: rawTitle || videoId,
-            };
-          }
-        }
-      }
-    }
-
-    throw new Error(`Failed to stream audio for video ${videoId}`);
-  }
 }
 
 export const youtubeService = new YouTubeService();

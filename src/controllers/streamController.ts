@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import { spawn } from 'node:child_process';
 import { youtubeService } from '../services/youtubeService.js';
-import { proxyManager } from '../services/proxyManager.js';
 import { cacheService } from '../services/cacheService.js';
 import { fallbackService } from '../services/fallbackService.js';
 import { saavnService } from '../services/saavnService.js';
@@ -9,10 +8,9 @@ import { config } from '../config.js';
 
 export class StreamController {
   /**
-   * Health Check and Proxy Status
+   * Health Check
    */
   public async getHealth(req: Request, res: Response): Promise<void> {
-    const proxyStatus = proxyManager.getStatus();
     const cacheStats = cacheService.getStats();
 
     res.json({
@@ -20,7 +18,6 @@ export class StreamController {
       version: '1.0.0',
       uptime: process.uptime(),
       clientType: config.ytClientType,
-      proxies: proxyStatus,
       cache: cacheStats,
       timestamp: new Date().toISOString(),
     });
