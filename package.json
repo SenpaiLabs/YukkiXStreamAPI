@@ -1,0 +1,38 @@
+{
+  "name": "yukki-x-stream-api",
+  "version": "1.0.0",
+  "description": "High-performance, anti-ban streaming API for Telegram Music Bots with proxy rotation, PO token support, client spoofing, and fallback streams",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "keywords": [
+    "telegram-bot",
+    "music-bot",
+    "stream-api",
+    "youtube-anti-ban",
+    "proxy-rotation",
+    "innertube"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "https-proxy-agent": "^7.0.6",
+    "node-cache": "^5.1.2",
+    "socks-proxy-agent": "^8.0.5",
+    "undici": "^7.3.0",
+    "youtubei.js": "^12.2.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.13.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
