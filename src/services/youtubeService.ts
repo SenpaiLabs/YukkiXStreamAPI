@@ -35,26 +35,7 @@ export class YouTubeService {
   private initPromise: Promise<Innertube> | null = null;
 
   /**
-   * Resolve ClientType from string config
-   */
-  private resolveClientType(typeStr: string): ClientType {
-    switch (typeStr.toUpperCase()) {
-      case 'TV_EMBEDDED':
-        return ClientType.TV_EMBEDDED;
-      case 'TV':
-        return ClientType.TV;
-      case 'IOS':
-        return ClientType.IOS;
-      case 'ANDROID':
-        return ClientType.ANDROID;
-      case 'WEB':
-      default:
-        return ClientType.WEB;
-    }
-  }
-
-  /**
-   * Initializes or gets the active InnerTube instance with anti-ban settings
+   * Initializes or gets the active InnerTube instance
    */
   public async getInstance(): Promise<Innertube> {
     if (this.innertube) {
@@ -70,7 +51,6 @@ export class YouTubeService {
       try {
         console.log('[YouTubeService] Initializing InnerTube session...');
 
-        // Custom fetch wrapper to route requests through rotating proxies and catch 429
         const customFetch = async (input: any, init?: RequestInit): Promise<Response> => {
           const proxy = proxyManager.getNextProxy();
           const modifiedInit: RequestInit = { ...init };
@@ -86,7 +66,7 @@ export class YouTubeService {
             const res = await fetch(input as any, modifiedInit);
 
             if (res.status === 429) {
-              console.warn(`[YouTubeService] Received HTTP 429 (Rate Limited / IP Ban) from YouTube.`);
+              console.warn(`[YouTubeService] Received HTTP 429 from YouTube.`);
               if (proxy) {
                 proxyManager.reportFailure(proxy.url, true);
               }
@@ -103,8 +83,6 @@ export class YouTubeService {
           }
         };
 
-        // Note: WEB session allows extracting base.js decipher algorithm successfully.
-        // Mobile/TV client spoofing is applied at download/stream extraction time.
         const yt = await Innertube.create({
           retrieve_player: true,
           generate_session_locally: true,
@@ -130,25 +108,92 @@ export class YouTubeService {
   }
 
   /**
-   * Resolves a video ID to song title using public oEmbed APIs (no IP ban or decipher needed)
+   * Extracts YouTube Video ID from standard formats or returns as-is
+   */
+  public extractVideoId(queryOrUrl: string): string | null {
+    if (/^[a-zA-Z0-9_-]{11}$/.test(queryOrUrl)) {
+      return queryOrUrl;
+    }
+    const match = queryOrUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+    return match ? match[1] : null;
+  }
+
+  /**
+   * Cleans title string for search fallbacks (removes [Official Video], feat, etc.)
+   */
+  public cleanTitle(rawTitle: string): string {
+    return rawTitle
+      .replace(/\[.*?\]|\(.*?\)/g, '')
+      .replace(/ft\..*|feat\..*/i, '')
+      .replace(/official\s*(music)?\s*(video|audio)?/gi, '')
+      .replace(/lyrics?/gi, '')
+      .replace(/\|\s*.*$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * Resolves a video ID or search query to track metadata
+   */
+  public async resolveTrack(queryOrUrl: string): Promise<{ id: string; title: string; duration: number; author: string; thumbnail?: string }> {
+    const videoId = this.extractVideoId(queryOrUrl);
+
+    if (videoId) {
+      try {
+        const info = await this.getInfo(videoId);
+        return {
+          id: videoId,
+          title: info.title || 'Unknown Title',
+          duration: info.duration || 0,
+          author: info.author || 'Unknown Artist',
+          thumbnail: info.thumbnails?.[0]?.url,
+        };
+      } catch {
+        // Fallback to oEmbed if getInfo fails
+        const title = await this.resolveVideoTitle(videoId);
+        return {
+          id: videoId,
+          title: title || 'YouTube Track',
+          duration: 0,
+          author: 'YouTube',
+          thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        };
+      }
+    }
+
+    // If it's a search term, search and get the first result
+    const searchResults = await this.search(queryOrUrl, 1);
+    if (searchResults.length > 0) {
+      const top = searchResults[0];
+      return {
+        id: top.id,
+        title: top.title,
+        duration: top.duration || 0,
+        author: top.author,
+        thumbnail: top.thumbnail,
+      };
+    }
+
+    throw new Error(`Could not resolve track for: "${queryOrUrl}"`);
+  }
+
+  /**
+   * Resolves a video ID to song title via public oEmbed
    */
   public async resolveVideoTitle(videoId: string): Promise<string | null> {
     try {
-      const res = await fetch(
-        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
-        { headers: { 'User-Agent': 'Mozilla/5.0' } }
-      );
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      const res = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const data = (await res.json()) as any;
         if (data?.title) return data.title;
-      }
-    } catch {}
-
-    try {
-      const res2 = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${videoId}`);
-      if (res2.ok) {
-        const data2 = (await res2.json()) as any;
-        if (data2?.title) return data2.title;
       }
     } catch {}
 
@@ -156,7 +201,7 @@ export class YouTubeService {
   }
 
   /**
-   * Search songs with caching and anti-ban retry logic
+   * Search songs with YouTube + Fallback support
    */
   public async search(query: string, limit: number = 10): Promise<SearchResultItem[]> {
     const cacheKey = `yt:search:${query.toLowerCase().trim()}`;
@@ -171,9 +216,7 @@ export class YouTubeService {
       const yt = await this.getInstance();
       const searchRes = await yt.search(query);
 
-      // Extract results from both videos getter and raw results array
       const items: any[] = [];
-
       if (searchRes.videos && searchRes.videos.length > 0) {
         items.push(...searchRes.videos);
       } else if (searchRes.results && searchRes.results.length > 0) {
@@ -198,12 +241,12 @@ export class YouTubeService {
         if (results.length >= limit) break;
       }
     } catch (err: any) {
-      console.warn(`[YouTubeService] YouTube search error for "${query}":`, err?.message || err);
+      console.warn(`[YouTubeService] YouTube search error:`, err?.message || err);
     }
 
-    // If YouTube returned 0 results or failed (e.g. Datacenter IP block), fallback automatically
+    // Fallback search if YouTube returns 0 results
     if (results.length === 0 && config.enableFallback) {
-      console.log(`[YouTubeService] YouTube search yielded 0 results for "${query}". Triggering Fallback provider...`);
+      console.log(`[YouTubeService] YouTube returned 0 results, attempting fallback search...`);
       const fallbackTracks = await fallbackService.searchAll(query, limit);
 
       for (const fb of fallbackTracks) {
@@ -225,6 +268,45 @@ export class YouTubeService {
     }
 
     return results;
+  }
+
+  /**
+   * Get autoplay recommendations
+   */
+  public async getAutoplayList(queryOrUrl: string, limit: number = 5): Promise<any[]> {
+    const videoId = this.extractVideoId(queryOrUrl) || queryOrUrl;
+
+    try {
+      const yt = await this.getInstance();
+      const info = await yt.getInfo(videoId);
+
+      const related: any[] = [];
+      const watchNext = (info as any).watch_next_feed || (info as any).related_videos || [];
+
+      for (const item of watchNext) {
+        if (item.id) {
+          related.push({
+            id: item.id,
+            title: item.title?.text || item.title || 'Related Song',
+            duration: item.duration?.seconds || 0,
+            thumbnail: item.thumbnails?.[0]?.url || item.thumbnail?.url || '',
+            artist: item.author?.name || 'Artist',
+          });
+        }
+        if (related.length >= limit) break;
+      }
+
+      if (related.length > 0) return related;
+    } catch {}
+
+    // Fallback: search similar songs
+    return (await this.search(queryOrUrl, limit)).map((item) => ({
+      id: item.id,
+      title: item.title,
+      duration: item.duration || 0,
+      thumbnail: item.thumbnail || '',
+      artist: item.author,
+    }));
   }
 
   /**
@@ -254,76 +336,62 @@ export class YouTubeService {
       cacheService.set(cacheKey, data);
       return data;
     } catch (err: any) {
-      // Fallback to oEmbed if YouTube blocks basic_info
       const title = await this.resolveVideoTitle(videoId);
       if (title) {
-        return {
-          id: videoId,
-          title,
-          author: 'Unknown Artist',
-        };
+        return { id: videoId, title, author: 'YouTube' };
       }
       throw err;
     }
   }
 
   /**
-   * Stream audio directly (pipes YouTube audio chunks directly to the response)
-   * If YouTube blocks on VPS, automatically switches to Fallback with title resolution.
+   * Audio Stream Pipe (Bulletproof: YouTube Direct -> YouTube Clients -> JioSaavn 320kbps Fallback)
    */
   public async getAudioStream(videoId: string, songTitleHint?: string): Promise<StreamDataResult> {
-    const clientTypesToTry = [
-      this.resolveClientType(config.ytClientType),
-      ClientType.TV_EMBEDDED,
-      ClientType.ANDROID,
-      ClientType.IOS,
-    ];
+    const clients: ('TV_EMBEDDED' | 'ANDROID' | 'IOS' | 'WEB')[] = ['TV_EMBEDDED', 'ANDROID', 'IOS', 'WEB'];
 
-    let lastError: any = null;
-
-    // Try multiple client types for YouTube
-    for (const clientType of clientTypesToTry) {
+    // 1. Try YouTube stream decipher
+    for (const client of clients) {
       try {
         const yt = await this.getInstance();
         const webStream = await yt.download(videoId, {
           type: 'audio',
           quality: 'best',
-          client: clientType as any,
+          client,
         });
 
-        const nodeStream = Readable.fromWeb(webStream as any);
-        return {
-          stream: nodeStream,
-          source: 'youtube',
-        };
+        if (webStream) {
+          const nodeStream = Readable.fromWeb(webStream as any);
+          return {
+            stream: nodeStream,
+            source: 'youtube',
+          };
+        }
       } catch (err: any) {
-        lastError = err;
-        console.warn(`[YouTubeService] Audio download failed with client ${clientType}:`, err?.message || err);
+        // Continue to next client or fallback
       }
     }
 
-    // If all YouTube clients failed (Datacenter IP ban / 429), trigger Fallback
+    // 2. Automatic Fallback to high quality direct audio stream
     if (config.enableFallback) {
-      console.log(`[YouTubeService] YouTube direct stream blocked. Resolving title for fallback...`);
+      let rawTitle = songTitleHint;
 
-      // Determine track title for search
-      let searchTitle = songTitleHint;
-      if (!searchTitle) {
-        searchTitle = (await this.resolveVideoTitle(videoId)) || undefined;
+      if (!rawTitle) {
+        rawTitle = (await this.resolveVideoTitle(videoId)) || undefined;
       }
 
-      if (searchTitle) {
-        console.log(`[YouTubeService] Fallback search title: "${searchTitle}"`);
-        const fallback = await fallbackService.getFallbackTrack(searchTitle);
+      const searchQuery = this.cleanTitle(rawTitle || videoId);
+
+      if (searchQuery) {
+        console.log(`[YouTubeService] Using Fallback stream for: "${searchQuery}"`);
+        const fallback = await fallbackService.getFallbackTrack(searchQuery);
 
         if (fallback && fallback.streamUrl) {
-          console.log(`[YouTubeService] Streaming from fallback provider: "${fallback.title}"`);
           const fbRes = await fetch(fallback.streamUrl);
 
           if (fbRes.ok && fbRes.body) {
-            const fbStream = Readable.fromWeb(fbRes.body as any);
             return {
-              stream: fbStream,
+              stream: Readable.fromWeb(fbRes.body as any),
               source: fallback.source,
               title: fallback.title,
               artist: fallback.artist,
@@ -334,44 +402,7 @@ export class YouTubeService {
       }
     }
 
-    throw new Error(`Failed to stream audio for ${videoId}: ${lastError?.message || 'Unknown error'}`);
-  }
-
-  /**
-   * Get direct streaming playback URL
-   */
-  public async getDirectPlaybackUrl(videoId: string): Promise<string> {
-    const cacheKey = `yt:directurl:${videoId}`;
-    const cached = cacheService.get<string>(cacheKey);
-    if (cached) return cached;
-
-    try {
-      const yt = await this.getInstance();
-      const format = await yt.getStreamingData(videoId, {
-        type: 'audio',
-        quality: 'best',
-        client: this.resolveClientType(config.ytClientType) as any,
-      });
-
-      if (!format || !format.url) {
-        throw new Error('Could not decipher direct audio playback format URL.');
-      }
-
-      cacheService.set(cacheKey, format.url, 7200);
-      return format.url;
-    } catch (err: any) {
-      console.warn(`[YouTubeService] Failed to extract direct URL for ${videoId}:`, err?.message);
-      throw err;
-    }
-  }
-
-  /**
-   * Force refresh session
-   */
-  public async refreshSession(): Promise<void> {
-    console.log('[YouTubeService] Refreshing InnerTube session...');
-    this.innertube = null;
-    await this.getInstance();
+    throw new Error(`Failed to stream audio for video ${videoId}`);
   }
 }
 

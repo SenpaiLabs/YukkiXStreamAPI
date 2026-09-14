@@ -33,7 +33,7 @@ const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
     : queryKey;
 
   if (token !== config.apiSecretKey) {
-    res.status(401).json({ error: 'Unauthorized: Invalid or missing API secret key.' });
+    res.status(401).json({ success: false, error: 'Unauthorized: Invalid or missing API secret key.' });
     return;
   }
 
@@ -45,55 +45,66 @@ app.get('/', (req: Request, res: Response) => {
   res.json({
     name: 'YukkiXStreamAPI',
     version: '1.0.0',
-    description: 'High-Performance Anti-IP-Ban YouTube Streaming API for Telegram Music Bots',
+    description: 'High-Performance Anti-IP-Ban YouTube Streaming API for YukkiMusic & Telegram Music Bots',
     endpoints: {
       health: 'GET /health',
-      search: 'GET /api/search?q=query&limit=10',
-      info: 'GET /api/info/:id',
-      stream: 'GET /api/stream/:id',
-      directUrl: 'GET /api/direct-url/:id',
-      refreshSession: 'POST /api/refresh-session',
+      stream: 'GET /stream?url=<query_or_url>&format=audio',
+      pipe: 'GET /pipe/:id',
+      search: 'GET /search?query=<text>&limit=5',
+      autoplay: 'GET /autoplay?url=<id_or_url>&limit=5',
     },
   });
 });
 
 app.get('/health', (req, res) => streamController.getHealth(req, res));
 
-// Protected API routes
+// YukkiMusic Native Endpoints (Matches anony/core/api.py exactly)
+app.get('/stream', authMiddleware, (req, res) => {
+  // If ?url= is passed, return JSON stream metadata for YukkiMusic
+  if (req.query.url || req.query.q) {
+    return streamController.resolveStream(req, res);
+  }
+  res.status(400).json({ success: false, error: 'Query parameter "url" is required.' });
+});
+
+app.get('/search', authMiddleware, (req, res) => streamController.search(req, res));
+app.get('/autoplay', authMiddleware, (req, res) => streamController.getAutoplay(req, res));
+
+// Direct Audio Pipe for PyTgCalls / ffmpeg
+app.get('/pipe/:id', (req, res) => streamController.pipeAudio(req, res));
+app.get('/stream/:id', (req, res) => streamController.pipeAudio(req, res));
+
+// Legacy /api Routes
 app.get('/api/search', authMiddleware, (req, res) => streamController.search(req, res));
 app.get('/api/info/:id', authMiddleware, (req, res) => streamController.getInfo(req, res));
-app.get('/api/stream/:id', authMiddleware, (req, res) => streamController.streamAudio(req, res));
-app.get('/api/direct-url/:id', authMiddleware, (req, res) => streamController.getDirectUrl(req, res));
-app.post('/api/refresh-session', authMiddleware, (req, res) => streamController.refreshSession(req, res));
+app.get('/api/stream/:id', (req, res) => streamController.pipeAudio(req, res));
 
 // Global Error Handler
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   console.error('[Server] Unhandled Exception:', err);
   if (!res.headersSent) {
     res.status(500).json({
+      success: false,
       error: 'An unexpected server error occurred.',
       message: err.message,
     });
   }
 });
 
-// Pre-warm YouTube session and start listening
+// Start Server
 const startServer = async () => {
   try {
     console.log(`[YukkiXStreamAPI] Starting service on ${config.host}:${config.port}...`);
-    console.log(`[YukkiXStreamAPI] Configured spoof client: ${config.ytClientType}`);
-    console.log(`[YukkiXStreamAPI] Proxies configured: ${config.proxies.length}`);
+    console.log(`[YukkiXStreamAPI] Pre-warming YouTube InnerTube session...`);
 
-    // Pre-warm the InnerTube session in background so the first user doesn't wait
     youtubeService.getInstance().catch((err) => {
-      console.warn('[YukkiXStreamAPI] Background session warmup warning:', err.message);
+      console.warn('[YukkiXStreamAPI] Background session warmup notice:', err.message);
     });
 
     const server = app.listen(config.port, config.host, () => {
       console.log(`[YukkiXStreamAPI] Server listening at http://${config.host}:${config.port}`);
     });
 
-    // Graceful shutdown
     const shutdown = () => {
       console.log('[YukkiXStreamAPI] Shutting down gracefully...');
       server.close(() => {
