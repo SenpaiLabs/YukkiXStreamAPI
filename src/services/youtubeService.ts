@@ -77,7 +77,33 @@ export class YouTubeService {
   }
 
   public async resolveTrack(queryOrUrl: string): Promise<{ id: string; title: string; duration: number; author: string; thumbnail?: string }> {
-    const videoId = this.extractVideoId(queryOrUrl);
+    let normalized = queryOrUrl.trim();
+
+    if (normalized.includes('spotify.com')) {
+      try {
+        const res = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(normalized)}`);
+        if (res.ok) {
+          const data = (await res.json()) as any;
+          if (data?.title) {
+            normalized = data.title;
+          }
+        }
+      } catch {}
+    } else if (normalized.includes('jiosaavn.com/song/')) {
+      try {
+        const parts = normalized.split('jiosaavn.com/song/')[1]?.split('/');
+        if (parts && parts[0]) {
+          normalized = parts[0].replace(/-/g, ' ');
+        }
+      } catch {}
+    } else if (normalized.includes('music.apple.com')) {
+      const match = normalized.match(/\/(?:song|album)\/([^/?#]+)/);
+      if (match && match[1]) {
+        normalized = match[1].replace(/-/g, ' ');
+      }
+    }
+
+    const videoId = this.extractVideoId(normalized);
 
     if (videoId) {
       try {
@@ -101,7 +127,7 @@ export class YouTubeService {
       }
     }
 
-    const searchResults = await this.search(queryOrUrl, 1);
+    const searchResults = await this.search(normalized, 1);
     if (searchResults.length > 0) {
       const top = searchResults[0];
       return {
