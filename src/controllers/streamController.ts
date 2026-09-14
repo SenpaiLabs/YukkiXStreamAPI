@@ -66,41 +66,47 @@ export class StreamController {
     }
 
     try {
-      // 1. Try JioSaavn first for 100% official studio master 320kbps track
-      const cleanTitle = youtubeService.cleanTitle(trimmed);
-      const saavnTrack = await saavnService.getOfficialStream(cleanTitle || trimmed);
+      // 1. ALWAYS resolve the actual YouTube video metadata FIRST!
+      const videoInfo = await youtubeService.resolveTrack(trimmed);
+      const videoTitle = videoInfo.title || '';
 
-      if (saavnTrack && saavnTrack.streamUrl) {
-        const responseData = {
-          streamUrl: saavnTrack.streamUrl,
-          title: saavnTrack.title,
-          quality: '320kbps',
-          duration: saavnTrack.duration,
-          thumbnail: saavnTrack.thumbnail,
-          artist: saavnTrack.artist,
-        };
-        // Cache response for 4 hours
-        cacheService.set(cacheKey, responseData, 14400);
-        res.json({
-          success: true,
-          data: responseData,
-        });
-        return;
+      // Check if user explicitly wants a remix, mix, mashup, 8D, lofi, cover, live, slowed version
+      const isMixOrVariant = /remix|mashup|8d|lofi|lo-fi|slowed|reverb|tiktok|trending|cover|mix|edit|bass|acoustic|live/i.test(
+        videoTitle + ' ' + trimmed
+      );
+
+      let directUrl: string | null = null;
+
+      // 2. If it's a standard studio release (NOT a special YouTube mix/remix), try JioSaavn for 100% official 320kbps master
+      if (!isMixOrVariant) {
+        const cleanTitle = youtubeService.cleanTitle(videoTitle);
+        const saavnTrack = await saavnService.getOfficialStream(cleanTitle);
+
+        // Verify title match before accepting JioSaavn!
+        if (saavnTrack && saavnTrack.streamUrl) {
+          const saavnTitleLower = saavnTrack.title.toLowerCase();
+          const cleanWords = cleanTitle.toLowerCase().split(' ').filter(w => w.length > 2);
+          const hasMatch = cleanWords.some(w => saavnTitleLower.includes(w));
+          if (hasMatch) {
+            directUrl = saavnTrack.streamUrl;
+          }
+        }
       }
 
-      // 2. Fallback to YouTube InnerTube metadata + SoundCloud direct stream
-      const videoInfo = await youtubeService.resolveTrack(trimmed);
+      // 3. If not found on Saavn, or if it IS a remix/mix/8D/mashup:
+      // Search SoundCloud with the EXACT YouTube title (keeps 8D, Remix, Mix intact!)
+      if (!directUrl) {
+        const searchQuery = isMixOrVariant
+          ? videoTitle.replace(/\|\s*.*$/g, '').trim()
+          : youtubeService.cleanTitle(videoTitle);
+        directUrl = await fallbackService.getDirectStream(searchQuery);
+      }
 
       const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
       const host = req.headers['x-forwarded-host'] || req.get('host') || `${config.host}:${config.port}`;
       const baseUrl = `${protocol}://${host}`;
 
-      const pipeUrl = `${baseUrl}/pipe/${videoInfo.id}?title=${encodeURIComponent(videoInfo.title)}`;
-
-      const cleanSearchQuery = youtubeService.cleanTitle(videoInfo.title || videoInfo.id);
-      const directUrl = await fallbackService.getDirectStream(cleanSearchQuery);
-
-      // If directUrl is a progressive stream (e.g. mp3/m4a/webm, not m3u8), PyTgCalls can stream it directly!
+      const pipeUrl = `${baseUrl}/pipe/${videoInfo.id}?title=${encodeURIComponent(videoTitle)}`;
       const finalStreamUrl = (directUrl && !directUrl.includes('.m3u8')) ? directUrl : pipeUrl;
 
       const responseData = {
