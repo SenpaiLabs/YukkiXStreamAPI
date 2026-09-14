@@ -21,7 +21,7 @@ export class FallbackService {
           '--no-playlist',
           '-f',
           'http_mp3/bestaudio[protocol^=http]/bestaudio',
-          `scsearch1:${query}`,
+          `scsearch3:${query}`,
         ],
         { timeout: 8000 },
         (error, stdout) => {
@@ -29,7 +29,15 @@ export class FallbackService {
             console.warn(`[FallbackService] Stream extraction failed for "${query}":`, error?.message);
             return resolve(null);
           }
-          const url = stdout.trim().split('\n')[0];
+          const urls = stdout
+            .trim()
+            .split('\n')
+            .map((l) => l.trim())
+            .filter((l) => l.startsWith('http'));
+
+          // CRITICAL: Filter out 30-second SoundCloud preview clips so full song plays!
+          const url = urls.find((u) => !u.includes('preview')) || urls[0];
+
           if (url && url.startsWith('http')) {
             // Cache stream URL for 2 hours
             cacheService.set(cacheKey, url, 7200);
