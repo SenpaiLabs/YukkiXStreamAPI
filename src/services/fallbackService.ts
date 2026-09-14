@@ -12,10 +12,17 @@ export class FallbackService {
     if (cached) return cached;
 
     return new Promise((resolve) => {
-      // Use scsearch1 (SoundCloud) as ultra-reliable zero-ban audio source
+      // Use scsearch1 with progressive HTTP MP3 format as ultra-reliable zero-ban audio source
       execFile(
         'yt-dlp',
-        ['-g', '--no-warnings', '--no-playlist', `scsearch1:${query}`],
+        [
+          '-g',
+          '--no-warnings',
+          '--no-playlist',
+          '-f',
+          'http_mp3/bestaudio[protocol^=http]/bestaudio',
+          `scsearch1:${query}`,
+        ],
         { timeout: 8000 },
         (error, stdout) => {
           if (error || !stdout) {

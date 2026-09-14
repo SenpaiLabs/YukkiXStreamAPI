@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { spawn } from 'node:child_process';
 import { youtubeService } from '../services/youtubeService.js';
 import { proxyManager } from '../services/proxyManager.js';
 import { cacheService } from '../services/cacheService.js';
@@ -62,10 +63,17 @@ export class StreamController {
 
       const pipeUrl = `${baseUrl}/pipe/${videoInfo.id}?title=${encodeURIComponent(videoInfo.title)}`;
 
+      // 2. Fetch direct playable stream URL
+      const cleanSearchQuery = youtubeService.cleanTitle(videoInfo.title || videoInfo.id);
+      const directUrl = await fallbackService.getDirectStream(cleanSearchQuery);
+
+      // If directUrl is a progressive stream (e.g. mp3/m4a/webm, not m3u8), PyTgCalls can stream it directly!
+      const finalStreamUrl = (directUrl && !directUrl.includes('.m3u8')) ? directUrl : pipeUrl;
+
       res.json({
         success: true,
         data: {
-          streamUrl: pipeUrl,
+          streamUrl: finalStreamUrl,
           title: videoInfo.title,
           quality: '320kbps',
           duration: videoInfo.duration || 0,
@@ -176,14 +184,56 @@ export class StreamController {
 
     // CRITICAL: Handle HTTP HEAD requests (e.g. curl -I or PyTgCalls probe)
     if (req.method === 'HEAD') {
-      res.setHeader('Content-Type', 'audio/webm');
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.setHeader('Location', streamUrl);
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Accept-Ranges', 'none');
       res.status(200).end();
       return;
     }
 
-    // 3. Redirect PyTgCalls/ffmpeg directly to CDN stream (0 VPS load, max speed, 302 Found)
+    // If streamUrl is an HLS m3u8 playlist, transcode on-the-fly to progressive MP3 using ffmpeg pipe
+    // This solves the PyTgCalls issue where -reconnect_at_eof causes infinite loops on m3u8 playlists
+    if (streamUrl.includes('.m3u8')) {
+      res.writeHead(200, {
+        'Content-Type': 'audio/mpeg',
+        'Transfer-Encoding': 'chunked',
+        'Connection': 'keep-alive',
+        'Cache-Control': 'no-cache',
+      });
+
+      const ff = spawn('ffmpeg', [
+        '-reconnect',
+        '1',
+        '-reconnect_streamed',
+        '1',
+        '-reconnect_delay_max',
+        '2',
+        '-i',
+        streamUrl,
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '192k',
+        '-f',
+        'mp3',
+        'pipe:1',
+      ]);
+
+      ff.stdout.pipe(res);
+
+      req.on('close', () => {
+        ff.kill('SIGKILL');
+      });
+
+      ff.on('error', (err) => {
+        console.error(`[StreamController] FFmpeg pipe error for ${id}:`, err);
+        if (!res.headersSent) {
+          res.status(500).end();
+        }
+      });
+      return;
+    }
+
+    // 3. Progressive direct audio stream (e.g. CloudFront MP3) -> 302 Found
     res.redirect(302, streamUrl);
   }
 
