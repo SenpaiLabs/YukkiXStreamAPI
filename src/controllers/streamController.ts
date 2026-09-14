@@ -4,6 +4,7 @@ import { youtubeService } from '../services/youtubeService.js';
 import { proxyManager } from '../services/proxyManager.js';
 import { cacheService } from '../services/cacheService.js';
 import { fallbackService } from '../services/fallbackService.js';
+import { saavnService } from '../services/saavnService.js';
 import { config } from '../config.js';
 
 export class StreamController {
@@ -53,9 +54,42 @@ export class StreamController {
       return;
     }
 
+    const trimmed = queryOrUrl.trim();
+    const cacheKey = `resolved:${trimmed.toLowerCase()}`;
+    const cached = cacheService.get<any>(cacheKey);
+    if (cached) {
+      res.json({
+        success: true,
+        data: cached,
+      });
+      return;
+    }
+
     try {
-      // 1. Resolve videoId and basic info
-      const videoInfo = await youtubeService.resolveTrack(queryOrUrl.trim());
+      // 1. Try JioSaavn first for 100% official studio master 320kbps track
+      const cleanTitle = youtubeService.cleanTitle(trimmed);
+      const saavnTrack = await saavnService.getOfficialStream(cleanTitle || trimmed);
+
+      if (saavnTrack && saavnTrack.streamUrl) {
+        const responseData = {
+          streamUrl: saavnTrack.streamUrl,
+          title: saavnTrack.title,
+          quality: '320kbps',
+          duration: saavnTrack.duration,
+          thumbnail: saavnTrack.thumbnail,
+          artist: saavnTrack.artist,
+        };
+        // Cache response for 4 hours
+        cacheService.set(cacheKey, responseData, 14400);
+        res.json({
+          success: true,
+          data: responseData,
+        });
+        return;
+      }
+
+      // 2. Fallback to YouTube InnerTube metadata + SoundCloud direct stream
+      const videoInfo = await youtubeService.resolveTrack(trimmed);
 
       const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
       const host = req.headers['x-forwarded-host'] || req.get('host') || `${config.host}:${config.port}`;
@@ -63,23 +97,27 @@ export class StreamController {
 
       const pipeUrl = `${baseUrl}/pipe/${videoInfo.id}?title=${encodeURIComponent(videoInfo.title)}`;
 
-      // 2. Fetch direct playable stream URL
       const cleanSearchQuery = youtubeService.cleanTitle(videoInfo.title || videoInfo.id);
       const directUrl = await fallbackService.getDirectStream(cleanSearchQuery);
 
       // If directUrl is a progressive stream (e.g. mp3/m4a/webm, not m3u8), PyTgCalls can stream it directly!
       const finalStreamUrl = (directUrl && !directUrl.includes('.m3u8')) ? directUrl : pipeUrl;
 
+      const responseData = {
+        streamUrl: finalStreamUrl,
+        title: videoInfo.title,
+        quality: '320kbps',
+        duration: videoInfo.duration || 0,
+        thumbnail: videoInfo.thumbnail || '',
+        artist: videoInfo.author || 'Unknown Artist',
+      };
+
+      // Cache response for 4 hours
+      cacheService.set(cacheKey, responseData, 14400);
+
       res.json({
         success: true,
-        data: {
-          streamUrl: finalStreamUrl,
-          title: videoInfo.title,
-          quality: '320kbps',
-          duration: videoInfo.duration || 0,
-          thumbnail: videoInfo.thumbnail || '',
-          artist: videoInfo.author || 'Unknown Artist',
-        },
+        data: responseData,
       });
     } catch (err: any) {
       console.error('[StreamController] Resolve stream error:', err);
