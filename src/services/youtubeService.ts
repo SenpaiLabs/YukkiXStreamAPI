@@ -76,33 +76,44 @@ export class YouTubeService {
       .trim();
   }
 
-  public async resolveTrack(queryOrUrl: string): Promise<{ id: string; title: string; duration: number; author: string; thumbnail?: string }> {
+  public async normalizeQuery(queryOrUrl: string): Promise<string> {
     let normalized = queryOrUrl.trim();
-
-    if (normalized.includes('spotify.com')) {
-      try {
-        const res = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(normalized)}`);
-        if (res.ok) {
-          const data = (await res.json()) as any;
-          if (data?.title) {
-            normalized = data.title;
+    const urlMatch = normalized.match(/(https?:\/\/\S+)/);
+    if (urlMatch) {
+      const cleanUrl = urlMatch[1].trim();
+      if (cleanUrl.includes('spotify.com')) {
+        try {
+          const baseSpotify = cleanUrl.split('?')[0];
+          const res = await fetch(`https://open.spotify.com/oembed?url=${encodeURIComponent(baseSpotify)}`);
+          if (res.ok) {
+            const data = (await res.json()) as any;
+            if (data?.title) {
+              const artist = data.author_name ? ` ${data.author_name}` : '';
+              return `${data.title}${artist}`.trim();
+            }
           }
-        }
-      } catch {}
-    } else if (normalized.includes('jiosaavn.com/song/')) {
-      try {
-        const parts = normalized.split('jiosaavn.com/song/')[1]?.split('/');
-        if (parts && parts[0]) {
-          normalized = parts[0].replace(/-/g, ' ');
-        }
-      } catch {}
-    } else if (normalized.includes('music.apple.com')) {
-      const match = normalized.match(/\/(?:song|album)\/([^/?#]+)/);
-      if (match && match[1]) {
-        normalized = match[1].replace(/-/g, ' ');
+        } catch {}
+      } else if (cleanUrl.includes('jiosaavn.com/song/')) {
+        try {
+          const parts = cleanUrl.split('jiosaavn.com/song/')[1]?.split('/');
+          if (parts && parts[0]) {
+            return parts[0].replace(/-/g, ' ');
+          }
+        } catch {}
+      } else if (cleanUrl.includes('music.apple.com')) {
+        try {
+          const match = cleanUrl.match(/\/(?:song|album)\/([^/?#]+)/);
+          if (match && match[1]) {
+            return match[1].replace(/-/g, ' ');
+          }
+        } catch {}
       }
     }
+    return normalized;
+  }
 
+  public async resolveTrack(queryOrUrl: string): Promise<{ id: string; title: string; duration: number; author: string; thumbnail?: string }> {
+    const normalized = await this.normalizeQuery(queryOrUrl);
     const videoId = this.extractVideoId(normalized);
 
     if (videoId) {
@@ -163,7 +174,8 @@ export class YouTubeService {
   }
 
   public async search(query: string, limit: number = 10): Promise<SearchResultItem[]> {
-    const cacheKey = `yt:search:${query.toLowerCase().trim()}`;
+    const normalized = await this.normalizeQuery(query);
+    const cacheKey = `yt:search:${normalized.toLowerCase().trim()}`;
     const cached = cacheService.get<SearchResultItem[]>(cacheKey);
     if (cached) {
       return cached.slice(0, limit);
@@ -173,7 +185,7 @@ export class YouTubeService {
 
     try {
       const yt = await this.getInstance();
-      const searchRes = await yt.search(query);
+      const searchRes = await yt.search(normalized);
 
       const items: any[] = [];
       if (searchRes.videos && searchRes.videos.length > 0) {

@@ -61,7 +61,12 @@ export class StreamController {
           const saavnTitleLower = saavnTrack.title.toLowerCase();
           const cleanWords = cleanTitle.toLowerCase().split(' ').filter(w => w.length > 2);
           const hasMatch = cleanWords.some(w => saavnTitleLower.includes(w));
-          if (hasMatch) {
+          const durationMatch =
+            !videoInfo.duration ||
+            !saavnTrack.duration ||
+            Math.abs(saavnTrack.duration - videoInfo.duration) < 60;
+
+          if (hasMatch && durationMatch) {
             directUrl = saavnTrack.streamUrl;
           }
         }
@@ -73,6 +78,9 @@ export class StreamController {
           ? videoTitle.replace(/\|\s*.*$/g, '').trim()
           : youtubeService.cleanTitle(videoTitle);
         directUrl = await fallbackService.getDirectStream(searchQuery);
+        if (!directUrl && videoInfo.author && !searchQuery.toLowerCase().includes(videoInfo.author.toLowerCase())) {
+          directUrl = await fallbackService.getDirectStream(`${searchQuery} ${videoInfo.author}`);
+        }
       }
 
       const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';

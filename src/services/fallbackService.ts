@@ -31,7 +31,7 @@ export class FallbackService {
             .filter((l) => l.startsWith('http'));
 
           // Filter out 30-second SoundCloud preview clips so full song plays
-          const url = urls.find((u) => !u.includes('preview')) || urls[0];
+          const url = urls.find((u) => !u.includes('preview')) || null;
 
           if (url && url.startsWith('http')) {
             cacheService.set(cacheKey, url, 7200);
